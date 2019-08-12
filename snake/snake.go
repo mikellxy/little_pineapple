@@ -2,20 +2,25 @@ package snake
 
 import (
 	"errors"
-	"fmt"
+	"github.com/mikellxy/little_pineapple/sdl2utils"
 	"math/rand"
-	"os"
-	"os/exec"
-	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	DIRLEFT  = "left"
-	DIRRIGHT = "right"
-	DIRUP    = "up"
-	DIRDOWN  = "down"
+	DIRLEFT          = "left"
+	DIRRIGHT         = "right"
+	DIRUP            = "up"
+	DIRDOWN          = "down"
+	COLORHEAD        = 0x087006
+	COLORBOBY        = 0x10e10c
+	COLORPINEAPPLE   = 0xd18429
+	COLORBACKGROUND  = 0x0
+	INTCODEHEAD      = 4
+	INTCODEBODY      = 1
+	INTCODPINEAPPLE  = 2
+	INTCODEBACKGROUD = 0
 )
 
 var (
@@ -55,10 +60,18 @@ func init() {
 	dirMap["s"] = DIRDOWN
 
 	dirMapZh = make(map[string]string)
-	dirMap[DIRLEFT] = "向左"
-	dirMap[DIRRIGHT] = "向右"
-	dirMap[DIRUP] = "向上"
-	dirMap[DIRDOWN] = "向下"
+	dirMapZh[DIRLEFT] = "向左"
+	dirMapZh[DIRRIGHT] = "向右"
+	dirMapZh[DIRUP] = "向上"
+	dirMapZh[DIRDOWN] = "向下"
+}
+
+type IGameMap interface {
+	Init(int, int, uint32) error
+	FillRect(int, int, uint32, bool) error
+	Refresh() error
+	Close()
+	CatchInput(chan string)
 }
 
 // a Sanke is described by a linked list
@@ -74,6 +87,7 @@ func NewSnake(winLen int, autoDir string, gmWidth, gmHeight, ms int) *List {
 		AutoDir:      autoDir,
 		GameOver:     false,
 		MilliSeconds: ms,
+		InputChan:    make(chan string),
 	}
 	l.AddGameMap(gmWidth, gmHeight)
 	return l
@@ -87,7 +101,8 @@ type List struct {
 	Head         *Node
 	Len          int
 	WinLen       int
-	GameMap      [][]string
+	GameMap      IGameMap
+	GameMapArr   [][]int
 	LeftLimit    int
 	RightLimit   int
 	UpLimit      int
@@ -95,21 +110,21 @@ type List struct {
 	AutoDir      string
 	GameOver     bool
 	MilliSeconds int
+	InputChan    chan string
 	sync.Mutex
 }
 
 func (l *List) AddGameMap(width, height int) {
-	gm := make([][]string, height, height)
-	tmpl := make([]string, width, width)
-	for i := range tmpl {
-		tmpl[i] = "0"
+	gma := make([][]int, height, height)
+	for i := range gma {
+		gma[i] = make([]int, width, width)
 	}
-	for i := range gm {
-		line := make([]string, width, width)
-		copy(line, tmpl)
-		gm[i] = line
-	}
+	l.GameMapArr = gma
+
+	gm := &sdl2utils.GameMap{}
+	gm.Init(width, height, 0x0)
 	l.GameMap = gm
+
 	l.RightLimit = width - 1
 	l.DownLimit = height - 1
 	headX := width / 2
@@ -119,50 +134,49 @@ func (l *List) AddGameMap(width, height int) {
 		yCoor: headY,
 	}
 	l.Len = 1
-	gm[headY][headX] = "4"
+	gma[headY][headX] = 4
+	gm.FillRect(headX, headY, COLORHEAD, false)
 	l.setPineApple()
+}
+
+func (l *List) setPineApple() {
+	rand.Seed(time.Now().Unix())
+	for {
+		randX := rand.Intn(l.RightLimit)
+		randY := rand.Intn(l.DownLimit)
+		if l.GameMapArr[randY][randX] != 0 {
+			continue
+		}
+		l.GameMapArr[randY][randX] = 2
+		l.GameMap.FillRect(randX, randY, COLORPINEAPPLE, false)
+		return
+	}
 }
 
 func (l *List) Start() {
 	l.showGameMap()
-	go l.getInput()
-	for {
-		time.Sleep(time.Duration(l.MilliSeconds) * time.Millisecond)
-		err := l.AutoMove()
-		if err != nil {
-			fmt.Println("")
-			l.GameOver = true
-			if err == errWin {
-				l.showGameMap()
-			}
-			fmt.Printf("%s%s, Game Over!\n\n", "      ", err.Error())
-			return
-		}
-		l.showGameMap()
-	}
-}
 
-func (l *List) getInput() {
-	var dir string
-	for {
-		if l.GameOver {
-			return
-		}
-		fmt.Scanln(&dir)
-		dir := strings.ToLower(dir)
-		if dir, ok := dirMap[dir]; ok {
-			_, _, err := l.PrepareMove(dir)
-			if err == errInvalidDir {
-				continue
-			}
-			fmt.Println("输入了", dirMapZh[dir], "移动")
+	go func() {
+		for {
+			dir := <- l.InputChan
 			l.AutoDir = dir
 		}
-	}
-}
+	}()
 
-func (l *List) inputDirection(dir string) {
-	l.AutoDir = dir
+	// periodically auto move
+	go func() {
+		for {
+			time.Sleep(time.Duration(l.MilliSeconds) * time.Millisecond)
+			err := l.AutoMove()
+			if err != nil {
+				return
+			}
+			l.showGameMap()
+		}
+
+	} ()
+
+	l.GameMap.CatchInput(l.InputChan)
 }
 
 func (l *List) AutoMove() error {
@@ -184,8 +198,10 @@ func (l *List) Move(dir string) error {
 			yCoor: nextY,
 			Next:  l.Head,
 		}
-		l.GameMap[l.Head.Next.yCoor][l.Head.Next.xCoor] = "1"
-		l.GameMap[nextY][nextX] = "4"
+		l.GameMapArr[l.Head.Next.yCoor][l.Head.Next.xCoor] = 1
+		l.GameMap.FillRect(l.Head.Next.xCoor, l.Head.Next.yCoor, COLORBOBY, false)
+		l.GameMapArr[nextY][nextX] = 4
+		l.GameMap.FillRect(nextX, nextY, COLORHEAD, false)
 		// set a new pineapple
 		l.setPineApple()
 		l.Len++
@@ -218,10 +234,10 @@ func (l *List) PrepareMove(dir string) (int, int, error) {
 	} else if l.Head.Next != nil && l.Head.Next.xCoor == nextX && l.Head.Next.yCoor == nextY {
 		// in case of the snake's length is large than 1, it can never go back to the most last location
 		return nextX, nextY, errInvalidDir
-	} else if l.GameMap[nextY][nextX] == "1" {
+	} else if l.GameMapArr[nextY][nextX] == 1 {
 		// except of invalid direction case, if the location moving to is part of the snake, means it strikes its body
 		return nextX, nextY, errSelfStrike
-	} else if l.GameMap[nextY][nextX] == "2" {
+	} else if l.GameMapArr[nextY][nextX] == 2 {
 		// the snake grows
 		return nextX, nextY, errSnakeGrows
 	}
@@ -236,43 +252,20 @@ func (l *List) moveOneByOne(nextX, nextY int) {
 		current.xCoor = nextX
 		current.yCoor = nextY
 		if current == l.Head {
-			l.GameMap[nextY][nextX] = "4"
+			l.GameMapArr[nextY][nextX] = 4
+			l.GameMap.FillRect(nextX, nextY, COLORHEAD, false)
 		} else {
-			l.GameMap[nextY][nextX] = "1"
+			l.GameMapArr[nextY][nextX] = 1
+			l.GameMap.FillRect(nextX, nextY, COLORBOBY, false)
 		}
-		l.GameMap[tempY][tempX] = "0"
+		l.GameMapArr[tempY][tempX] = 0
+		l.GameMap.FillRect(tempX, tempY, COLORBACKGROUND, false)
 		current = current.Next
 		nextX = tempX
 		nextY = tempY
 	}
 }
 
-func (l *List) setPineApple() {
-	rand.Seed(time.Now().Unix())
-	for {
-		randX := rand.Intn(l.RightLimit)
-		randY := rand.Intn(l.DownLimit)
-		if l.GameMap[randY][randX] != "0" {
-			continue
-		}
-		l.GameMap[randY][randX] = "2"
-		return
-	}
-}
-
 func (l *List) showGameMap() {
-	clearStdOut()
-	outPut := ""
-	for _, line := range l.GameMap {
-		outPut += "      "
-		outPut += strings.Join(line, "  ")
-		outPut += "\n"
-	}
-	fmt.Printf("%s%s", "\n\n\n\n\n\n", outPut)
-}
-
-func clearStdOut() {
-	cmd := exec.Command("clear")
-	cmd.Stdout = os.Stdout
-	cmd.Run()
+	l.GameMap.Refresh()
 }

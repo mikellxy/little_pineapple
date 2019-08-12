@@ -5,6 +5,7 @@ import (
 )
 
 func main() {
-	snake := snake2.NewSnake(2, snake2.DIRLEFT, 11, 11, 1000)
+	snake := snake2.NewSnake(8, snake2.DIRLEFT, 16, 12, 1000)
 	snake.Start()
+
 }
