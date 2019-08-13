@@ -2,7 +2,7 @@ package snake
 
 import (
 	"errors"
-	"github.com/mikellxy/little_pineapple/sdl2utils"
+	"github.com/mikellxy/little_pineapple/isnake"
 	"math/rand"
 	"sync"
 	"time"
@@ -66,14 +66,6 @@ func init() {
 	dirMapZh[DIRDOWN] = "向下"
 }
 
-type IGameMap interface {
-	Init(int, int, uint32) error
-	FillRect(int, int, uint32, bool) error
-	Refresh() error
-	Close()
-	CatchInput(chan string)
-}
-
 // a Sanke is described by a linked list
 type Node struct {
 	Next  *Node
@@ -81,7 +73,7 @@ type Node struct {
 	yCoor int // y coordinate point
 }
 
-func NewSnake(winLen int, autoDir string, gmWidth, gmHeight, ms int) *List {
+func NewSnake(winLen int, autoDir string, gmWidth, gmHeight, ms int, gm isnake.IGameMap) *List {
 	l := &List{
 		WinLen:       winLen,
 		AutoDir:      autoDir,
@@ -89,7 +81,7 @@ func NewSnake(winLen int, autoDir string, gmWidth, gmHeight, ms int) *List {
 		MilliSeconds: ms,
 		InputChan:    make(chan string),
 	}
-	l.AddGameMap(gmWidth, gmHeight)
+	l.AddGameMap(gmWidth, gmHeight, gm)
 	return l
 }
 
@@ -101,7 +93,7 @@ type List struct {
 	Head         *Node
 	Len          int
 	WinLen       int
-	GameMap      IGameMap
+	GameMap      isnake.IGameMap
 	GameMapArr   [][]int
 	LeftLimit    int
 	RightLimit   int
@@ -114,14 +106,13 @@ type List struct {
 	sync.Mutex
 }
 
-func (l *List) AddGameMap(width, height int) {
+func (l *List) AddGameMap(width, height int, gm isnake.IGameMap) {
 	gma := make([][]int, height, height)
 	for i := range gma {
 		gma[i] = make([]int, width, width)
 	}
 	l.GameMapArr = gma
 
-	gm := &sdl2utils.GameMap{}
 	gm.Init(width, height, 0x0)
 	l.GameMap = gm
 
@@ -206,6 +197,7 @@ func (l *List) Move(dir string) error {
 		l.setPineApple()
 		l.Len++
 		if l.Len == l.WinLen {
+			l.GameMap.Refresh()
 			l.GameOver = true
 			return errWin
 		}
